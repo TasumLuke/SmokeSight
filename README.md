@@ -28,7 +28,7 @@ pip install acrf-qiu
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/acrf-qiu.git
+git clone https://github.com/TasumLuke/Quantum-Random-Forest.git
 cd acrf-qiu
 
 # Install in development mode
