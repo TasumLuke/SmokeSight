@@ -1,4 +1,3 @@
-"""
 # ACRF-QIU: Adaptive Causal Random Forest with Quantum-Inspired Uncertainty Quantification
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
