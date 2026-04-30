@@ -1,12 +1,10 @@
 """Atmospheric path correction.
 
-Two implementations:
-
-* :class:`IdentityAtmos` - no correction (T_atm = 1, L_path = 0).
-* :class:`AtmosModel` - full correction backed by py6s or pymodtran.
-
-If neither optional dependency is installed, :func:`make_atmos` falls back
-to :class:`IdentityAtmos` and emits a UserWarning.
+Two flavours: IdentityAtmos (no-op, used when nothing is configured or
+when the optional radiative-transfer extras aren't installed) and
+AtmosModel (proper correction via py6s or pymodtran). Use make_atmos()
+to pick the right one from a parsed cal.yaml — it handles the import
+fallback so the rest of the pipeline doesn't have to care.
 """
 
 from __future__ import annotations
@@ -19,16 +17,15 @@ import numpy as np
 
 from smokesight._types import FloatArray
 
-_DEFAULT_RELATIVE_UNCERTAINTY = 0.05
+_FALLBACK_RELATIVE_SIGMA = 0.05
 
 
 @dataclass
 class IdentityAtmos:
-    """Identity atmospheric correction: returns L unchanged."""
+    """No-op: T_atm=1, L_path=0, sigma=0."""
 
     T_atm: float = 1.0
     L_path: float = 0.0
-    relative_uncertainty: float = 0.0
 
     def correct(self, L: FloatArray) -> FloatArray:
         return L
@@ -38,77 +35,79 @@ class IdentityAtmos:
 
 
 class AtmosModel:
-    """Atmospheric correction backed by py6s or pymodtran.
+    """Correction backed by py6s or pymodtran.
 
-    The constructor attempts to import py6s, then pymodtran. If neither is
-    importable, :class:`ImportError` is raised; callers should use
-    :func:`make_atmos` to get a graceful fallback to :class:`IdentityAtmos`.
+    The constructor probes the requested backend (or auto-picks if model
+    is unset) and raises ImportError if nothing is available. Callers
+    that want graceful fallback should go through ``make_atmos``.
     """
 
     def __init__(self, config: Mapping[str, Any]):
-        backend = self._resolve_backend(config)
-        self.backend_name: str = backend
-        self.config: Mapping[str, Any] = config
-        self.T_atm: float = float(config.get("transmittance", 0.95))
-        self.L_path: float = float(config.get("path_radiance", 0.0))
-        self.relative_uncertainty: float = float(
-            config.get("relative_uncertainty", _DEFAULT_RELATIVE_UNCERTAINTY)
+        self.backend = _probe_backend(str(config.get("model", "")).lower())
+        self.config = config
+        self.T_atm = float(config.get("transmittance", 0.95))
+        self.L_path = float(config.get("path_radiance", 0.0))
+        self.relative_sigma = float(
+            config.get("relative_uncertainty", _FALLBACK_RELATIVE_SIGMA)
         )
 
-    @staticmethod
-    def _resolve_backend(config: Mapping[str, Any]) -> str:
-        requested = str(config.get("model", "")).lower()
-        if requested == "identity":
-            raise ValueError(
-                "AtmosModel does not handle 'identity'; use IdentityAtmos directly"
-            )
-        if requested in ("6s", "sixs"):
-            import py6s  # noqa: F401  (imported for availability check)
-
-            return "py6s"
-        if requested == "modtran":
-            import pymodtran  # noqa: F401
-
-            return "pymodtran"
-        try:
-            import py6s  # noqa: F401
-
-            return "py6s"
-        except ImportError:
-            import pymodtran  # noqa: F401
-
-            return "pymodtran"
-
     def correct(self, L: FloatArray) -> FloatArray:
-        result = (L - self.L_path) / self.T_atm
-        return np.asarray(result.astype(L.dtype, copy=False))
+        out = (L - self.L_path) / self.T_atm
+        return np.asarray(out.astype(L.dtype, copy=False))
 
     def uncertainty(self, L: FloatArray) -> FloatArray:
-        return np.asarray(np.abs(L) * np.float32(self.relative_uncertainty))
+        return np.asarray(np.abs(L) * np.float32(self.relative_sigma))
 
 
 AtmosLike = Union[IdentityAtmos, AtmosModel]
 
+_INSTALL_HINT = (
+    "Neither py6s nor pymodtran is installed; atmospheric correction is "
+    "disabled. Install with `pip install smokesight[calibrate]` to enable."
+)
+
 
 def make_atmos(config: Mapping[str, Any]) -> AtmosLike:
-    """Construct an atmospheric model from config, falling back gracefully.
+    """Pick an atmosphere implementation from a parsed cal.yaml.
 
-    If ``config`` lacks an ``atmosphere`` section or sets ``model: identity``,
-    returns :class:`IdentityAtmos`. Otherwise tries :class:`AtmosModel`; on
-    ImportError (py6s/pymodtran missing), emits a UserWarning and falls back
-    to :class:`IdentityAtmos`.
+    No 'atmosphere' section, or model='identity' -> IdentityAtmos.
+    Anything else -> AtmosModel, falling back to IdentityAtmos with a
+    UserWarning if the requested backend isn't installed.
     """
     atmos_cfg = config.get("atmosphere") if isinstance(config, Mapping) else None
-    if not atmos_cfg or str(atmos_cfg.get("model", "identity")).lower() == "identity":
+    if not atmos_cfg:
+        return IdentityAtmos()
+    if str(atmos_cfg.get("model", "identity")).lower() == "identity":
         return IdentityAtmos()
     try:
         return AtmosModel(atmos_cfg)
     except ImportError:
-        warnings.warn(
-            "Neither py6s nor pymodtran is installed; atmospheric correction "
-            "is disabled. Install with `pip install smokesight[calibrate]` "
-            "to enable.",
-            UserWarning,
-            stacklevel=2,
-        )
+        warnings.warn(_INSTALL_HINT, UserWarning, stacklevel=2)
         return IdentityAtmos()
+
+
+def _probe_backend(requested: str) -> str:
+    """Return the name of the backend we'll use, or raise ImportError."""
+    if requested == "identity":
+        # Caller bug: should have used IdentityAtmos directly.
+        raise ValueError("AtmosModel can't run the identity backend")
+
+    if requested in ("6s", "sixs"):
+        import py6s  # noqa: F401
+
+        return "py6s"
+    if requested == "modtran":
+        import pymodtran  # noqa: F401
+
+        return "pymodtran"
+
+    # Auto-pick: prefer py6s, fall back to pymodtran, otherwise let
+    # ImportError propagate so make_atmos can warn and fall back.
+    try:
+        import py6s  # noqa: F401
+
+        return "py6s"
+    except ImportError:
+        import pymodtran  # noqa: F401
+
+        return "pymodtran"
