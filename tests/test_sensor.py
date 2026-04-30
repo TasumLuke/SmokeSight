@@ -1,4 +1,4 @@
-"""Unit tests for smokesight._sensor."""
+"""Tests for smokesight._sensor."""
 
 from __future__ import annotations
 

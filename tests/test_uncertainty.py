@@ -1,10 +1,4 @@
-"""Unit tests for smokesight._uncertainty.
-
-Reproducibility note: the Monte Carlo helper is internally seeded with
-default_rng(42). These tests assert that two runs on identical inputs
-produce identical outputs, which is the contract that lets CI be
-deterministic across worker environments.
-"""
+"""Tests for smokesight._uncertainty."""
 
 from __future__ import annotations
 
