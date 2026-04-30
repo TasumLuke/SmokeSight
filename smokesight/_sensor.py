@@ -12,9 +12,8 @@ from typing import Any, Mapping, Optional, Tuple
 
 import imageio.v2 as imageio
 import numpy as np
-import numpy.typing as npt
 
-NDArrayAny = npt.NDArray[Any]
+from smokesight._types import FloatArray
 
 _VALID_BIT_DEPTHS = (8, 12, 14, 16)
 _FLAT_MEAN_TOLERANCE = 1e-3
@@ -44,11 +43,11 @@ class SensorModel:
         NER, the read-noise floor in radiance units.
     """
 
-    dark: NDArrayAny
-    flat: NDArrayAny
+    dark: FloatArray
+    flat: FloatArray
     gain: float
-    spectral_response: NDArrayAny
-    wavelengths: NDArrayAny
+    spectral_response: FloatArray
+    wavelengths: FloatArray
     bit_depth: int
     noise_equivalent_radiance: float
     flat_field_relative_uncertainty: float = field(default=0.01)
@@ -152,7 +151,7 @@ def _load_or_default(
     default_value: float,
     kind: str,
     normalize_mean: bool,
-) -> NDArrayAny:
+) -> FloatArray:
     if path is not None:
         arr = np.asarray(imageio.imread(Path(path)), dtype=np.float32)
         if arr.ndim != 2:

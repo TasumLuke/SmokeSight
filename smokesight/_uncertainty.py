@@ -19,19 +19,19 @@ from __future__ import annotations
 from typing import Any, Callable, Sequence, Tuple, Union
 
 import numpy as np
-import numpy.typing as npt
 
-NDArrayAny = npt.NDArray[Any]
-ArrayOrFloat = Union[NDArrayAny, float]
+from smokesight._types import FloatArray
+
+ArrayOrFloat = Union[FloatArray, float]
 MC_SEED = 42
 MC_DEFAULT_N = 1000
 
 
 def radiance_uncertainty(
-    L: NDArrayAny,
+    L: FloatArray,
     sensor: Any,
     atmos: Any,
-) -> NDArrayAny:
+) -> FloatArray:
     """Combined 1-sigma radiance uncertainty.
 
     ``sigma_L = sqrt(shot^2 + read^2 + flatfield^2 + atmos^2)``
@@ -57,11 +57,11 @@ def radiance_uncertainty(
 
 
 def tau_uncertainty(
-    L: NDArrayAny,
-    sigma_L: NDArrayAny,
-    L0: NDArrayAny,
-    sigma_L0: NDArrayAny,
-) -> NDArrayAny:
+    L: FloatArray,
+    sigma_L: FloatArray,
+    L0: FloatArray,
+    sigma_L0: FloatArray,
+) -> FloatArray:
     """Analytic Beer-Lambert uncertainty.
 
     For ``tau = -ln(L / L0)``, first-order error propagation gives::
@@ -87,8 +87,8 @@ def tau_uncertainty(
 
 
 def centroid_uncertainty(
-    tau: NDArrayAny,
-    sigma_tau: NDArrayAny,
+    tau: FloatArray,
+    sigma_tau: FloatArray,
 ) -> Tuple[float, float]:
     """Delta-method 1-sigma uncertainty on the tau-weighted centroid.
 
@@ -131,7 +131,7 @@ def centroid_uncertainty(
     return float(np.sqrt(var_x)), float(np.sqrt(var_y))
 
 
-def gaussian_fit_uncertainty(pcov: NDArrayAny) -> NDArrayAny:
+def gaussian_fit_uncertainty(pcov: FloatArray) -> FloatArray:
     """1-sigma parameter uncertainties from a scipy.optimize.curve_fit covariance.
 
     Returns ``sqrt(diag(pcov))``. Diagonal entries that are non-finite or
@@ -147,11 +147,11 @@ def gaussian_fit_uncertainty(pcov: NDArrayAny) -> NDArrayAny:
 
 
 def monte_carlo(
-    func: Callable[..., NDArrayAny],
+    func: Callable[..., FloatArray],
     inputs: Sequence[ArrayOrFloat],
     sigmas: Sequence[ArrayOrFloat],
     n: int = MC_DEFAULT_N,
-) -> Tuple[NDArrayAny, NDArrayAny]:
+) -> Tuple[FloatArray, FloatArray]:
     """Generic Monte Carlo propagation through ``func``.
 
     Draws ``n`` Gaussian-perturbed copies of each input (using the

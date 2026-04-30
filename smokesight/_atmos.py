@@ -16,9 +16,8 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Union
 
 import numpy as np
-import numpy.typing as npt
 
-NDArrayAny = npt.NDArray[Any]
+from smokesight._types import FloatArray
 
 _DEFAULT_RELATIVE_UNCERTAINTY = 0.05
 
@@ -31,10 +30,10 @@ class IdentityAtmos:
     L_path: float = 0.0
     relative_uncertainty: float = 0.0
 
-    def correct(self, L: NDArrayAny) -> NDArrayAny:
+    def correct(self, L: FloatArray) -> FloatArray:
         return L
 
-    def uncertainty(self, L: NDArrayAny) -> NDArrayAny:
+    def uncertainty(self, L: FloatArray) -> FloatArray:
         return np.zeros_like(L, dtype=np.float32)
 
 
@@ -80,11 +79,11 @@ class AtmosModel:
 
             return "pymodtran"
 
-    def correct(self, L: NDArrayAny) -> NDArrayAny:
+    def correct(self, L: FloatArray) -> FloatArray:
         result = (L - self.L_path) / self.T_atm
         return np.asarray(result.astype(L.dtype, copy=False))
 
-    def uncertainty(self, L: NDArrayAny) -> NDArrayAny:
+    def uncertainty(self, L: FloatArray) -> FloatArray:
         return np.asarray(np.abs(L) * np.float32(self.relative_uncertainty))
 
 

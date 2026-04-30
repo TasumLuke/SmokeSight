@@ -9,9 +9,8 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Optional
 
 import numpy as np
-import numpy.typing as npt
 
-NDArrayAny = npt.NDArray[Any]
+from smokesight._types import FloatArray
 
 
 @dataclass
@@ -118,7 +117,7 @@ def compute_pixel_scale(
     return float(slant_range * ifov)
 
 
-def project_to_ground(pixels: NDArrayAny, geom: CameraGeometry) -> NDArrayAny:
+def project_to_ground(pixels: FloatArray, geom: CameraGeometry) -> FloatArray:
     """Project pixel coordinates to ground-plane metres.
 
     ``pixels`` is an array of shape (..., 2) holding (x, y) pixel
