@@ -1,0 +1,28 @@
+cff-version: 1.2.0
+message: "If you use SmokeSight, please cite it using this metadata."
+title: "SmokeSight: Radiometric plume measurement from EO/IR video"
+type: software
+authors:
+  - family-names: "[AUTHOR SURNAME]"
+    given-names: "[AUTHOR GIVEN NAME]"
+    orcid: "https://orcid.org/0000-0000-0000-0000"
+repository-code: "https://github.com/TasumLuke/smokesight"
+url: "https://smokesight.readthedocs.io"
+license: Apache-2.0
+version: 0.1.0
+date-released: "2026-04-29"
+keywords:
+  - atmospheric science
+  - plume measurement
+  - optical depth
+  - radiometry
+  - EO/IR
+preferred-citation:
+  type: article
+  journal: "Journal of Open Source Software"
+  doi: "(to be added after acceptance)"
+  authors:
+    - family-names: "[AUTHOR SURNAME]"
+      given-names: "[AUTHOR GIVEN NAME]"
+  title: "SmokeSight: Radiometric plume measurement from EO/IR video"
+  year: 2026
