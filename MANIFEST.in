@@ -1,0 +1,6 @@
+include LICENSE
+include CITATION.cff
+include README.md
+recursive-include smokesight *.py *.typed
+recursive-include scenarios *.yaml
+recursive-include docs *.rst *.py *.ipynb
