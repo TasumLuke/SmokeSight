@@ -70,7 +70,7 @@ Three things that do not exist together in any open package:
 Open an issue before submitting large changes. Tests must pass and new measurement outputs must include uncertainty propagation, if it cannot be documented, it does not ship.
  
 ```bash
-git clone https://github.com/your-org/smokesight](https://github.com/TasumLuke/Smoke-Sight
+git clone https://github.com/TasumLuke/Smoke-Sight
 pip install -e ".[dev]"
 pre-commit install
 pytest
