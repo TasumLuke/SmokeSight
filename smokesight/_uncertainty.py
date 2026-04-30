@@ -1,59 +1,54 @@
-"""Uncertainty propagation utilities.
+"""Uncertainty propagation helpers.
 
-This is the most critical private module. Every measurement quantity that
-SmokeSight returns must have a documented uncertainty path that goes
-through one of the helpers below.
-
-The Monte Carlo helper is *internally seeded* with ``np.random.default_rng(42)``;
-callers must not pass an external seed. This is so two runs on the same
-inputs produce identical uncertainty estimates and CI is deterministic.
-
-When a Monte Carlo result is reported as ``sigma``, it is computed as
-``(p84 - p16) / 2`` (the 16th-84th percentile half-range), not the
-sample standard deviation. This matches the SmokeSight reporting rule
-in the design guide section 6.
+The MC helper is seeded with default_rng(42) so two runs on the same
+inputs produce identical output; callers don't get to override the seed.
+The "sigma" reported by monte_carlo is the (p84-p16)/2 half-range, not
+std() of the samples — that's the convention SmokeSight uses everywhere
+it ships an MC-derived uncertainty.
 """
 
 from __future__ import annotations
 
-from typing import Any, Callable, Sequence, Tuple, Union
+from typing import Callable, Protocol, Sequence, Tuple, Union
 
 import numpy as np
 
 from smokesight._types import FloatArray
 
 ArrayOrFloat = Union[FloatArray, float]
-MC_SEED = 42
-MC_DEFAULT_N = 1000
+
+_MC_SEED = 42
+_MC_MIN_SAMPLES = 1000
+
+
+class _SensorNoise(Protocol):
+    """The slice of SensorModel that radiance_uncertainty needs."""
+
+    gain: float
+    noise_equivalent_radiance: float
+    flat_field_relative_uncertainty: float
+
+
+class _AtmosNoise(Protocol):
+    def uncertainty(self, L: FloatArray) -> FloatArray: ...
 
 
 def radiance_uncertainty(
     L: FloatArray,
-    sensor: Any,
-    atmos: Any,
+    sensor: _SensorNoise,
+    atmos: _AtmosNoise,
 ) -> FloatArray:
-    """Combined 1-sigma radiance uncertainty.
-
-    ``sigma_L = sqrt(shot^2 + read^2 + flatfield^2 + atmos^2)``
-
-    * Shot noise: ``sqrt(L * gain)`` (radiance-domain Poisson).
-    * Read noise: ``sensor.noise_equivalent_radiance``, broadcast.
-    * Flat-field uncertainty: ``L * sensor.flat_field_relative_uncertainty``.
-    * Atmospheric uncertainty: ``atmos.uncertainty(L)``.
-    """
+    """sigma_L = sqrt(shot^2 + read^2 + flat^2 + atmos^2), per pixel."""
     L = np.asarray(L)
-    L_clipped = np.maximum(L, 0.0)
-    gain = float(getattr(sensor, "gain"))
-    ner = float(getattr(sensor, "noise_equivalent_radiance"))
-    ff_rel = float(getattr(sensor, "flat_field_relative_uncertainty", 0.01))
+    L_pos = np.maximum(L, 0.0)  # negative DN can't generate shot noise
 
-    sigma_shot = np.sqrt(L_clipped * gain)
-    sigma_read = np.full_like(L_clipped, ner, dtype=L_clipped.dtype)
-    sigma_flat = np.abs(L_clipped) * ff_rel
-    sigma_atmos = np.asarray(atmos.uncertainty(L_clipped), dtype=L_clipped.dtype)
+    shot = np.sqrt(L_pos * sensor.gain)
+    read = np.full_like(L_pos, sensor.noise_equivalent_radiance, dtype=L_pos.dtype)
+    flat = L_pos * sensor.flat_field_relative_uncertainty
+    atmos_sigma = np.asarray(atmos.uncertainty(L_pos), dtype=L_pos.dtype)
 
-    sigma_L = np.sqrt(sigma_shot**2 + sigma_read**2 + sigma_flat**2 + sigma_atmos**2)
-    return np.asarray(sigma_L.astype(np.float32, copy=False))
+    sigma = np.sqrt(shot**2 + read**2 + flat**2 + atmos_sigma**2)
+    return np.asarray(sigma.astype(np.float32, copy=False))
 
 
 def tau_uncertainty(
@@ -62,15 +57,11 @@ def tau_uncertainty(
     L0: FloatArray,
     sigma_L0: FloatArray,
 ) -> FloatArray:
-    """Analytic Beer-Lambert uncertainty.
+    """sigma_tau = sqrt((sigma_L/L)^2 + (sigma_L0/L0)^2), NaN where invalid.
 
-    For ``tau = -ln(L / L0)``, first-order error propagation gives::
-
-        sigma_tau = sqrt( (sigma_L / L)^2 + (sigma_L0 / L0)^2 )
-
-    Pixels where either ``L`` or ``L0`` is zero or non-finite produce NaN
-    in the output (consistent with the masking rules in the design guide
-    section 6).
+    First-order propagation through tau = -ln(L / L0). Invalid =
+    L<=0, L0<=0, or non-finite — in those cases sigma_tau is NaN, which
+    matches the contract that masked tau pixels carry no numeric sigma.
     """
     L = np.asarray(L, dtype=np.float64)
     sigma_L = np.asarray(sigma_L, dtype=np.float64)
@@ -79,29 +70,13 @@ def tau_uncertainty(
 
     invalid = (L <= 0) | (L0 <= 0) | ~np.isfinite(L) | ~np.isfinite(L0)
     with np.errstate(divide="ignore", invalid="ignore"):
-        rel_L = sigma_L / L
-        rel_L0 = sigma_L0 / L0
-        sigma_tau = np.sqrt(rel_L**2 + rel_L0**2)
-    sigma_tau = np.where(invalid, np.nan, sigma_tau)
-    return np.asarray(sigma_tau.astype(np.float32, copy=False))
+        sigma = np.sqrt((sigma_L / L) ** 2 + (sigma_L0 / L0) ** 2)
+    sigma = np.where(invalid, np.nan, sigma)
+    return np.asarray(sigma.astype(np.float32, copy=False))
 
 
-def centroid_uncertainty(
-    tau: FloatArray,
-    sigma_tau: FloatArray,
-) -> Tuple[float, float]:
-    """Delta-method 1-sigma uncertainty on the tau-weighted centroid.
-
-    For a centroid ``x_c = sum(w_i * x_i) / sum(w_i)`` with weights
-    ``w_i = tau_i`` and weight uncertainties ``sigma_i``, the propagated
-    uncertainty on ``x_c`` is::
-
-        sigma_x_c^2 = sum( (d x_c / d w_i)^2 * sigma_i^2 )
-                    = sum( ((x_i - x_c) / W)^2 * sigma_i^2 )
-
-    where ``W = sum(w_i)``. Returns ``(sigma_x, sigma_y)`` for a 2-D image.
-    NaN-valued pixels are dropped from both the centroid and uncertainty.
-    """
+def centroid_uncertainty(tau: FloatArray, sigma_tau: FloatArray) -> Tuple[float, float]:
+    """1-sigma uncertainty on a tau-weighted 2-D centroid (delta method)."""
     tau = np.asarray(tau, dtype=np.float64)
     sigma_tau = np.asarray(sigma_tau, dtype=np.float64)
     if tau.shape != sigma_tau.shape:
@@ -115,32 +90,32 @@ def centroid_uncertainty(
     if not valid.any():
         return float("nan"), float("nan")
 
-    h, w = tau.shape
-    yy, xx = np.mgrid[0:h, 0:w]
     weights = np.where(valid, tau, 0.0)
-    sigma = np.where(valid, sigma_tau, 0.0)
+    sigmas = np.where(valid, sigma_tau, 0.0)
     total = float(weights.sum())
     if total <= 0:
         return float("nan"), float("nan")
 
+    yy, xx = np.mgrid[0 : tau.shape[0], 0 : tau.shape[1]]
     cx = float((weights * xx).sum() / total)
     cy = float((weights * yy).sum() / total)
 
-    var_x = float(((xx - cx) ** 2 * sigma**2).sum() / total**2)
-    var_y = float(((yy - cy) ** 2 * sigma**2).sum() / total**2)
+    # d(cx)/d(w_i) = (x_i - cx) / total, then square and sum.
+    var_x = float(((xx - cx) ** 2 * sigmas**2).sum() / total**2)
+    var_y = float(((yy - cy) ** 2 * sigmas**2).sum() / total**2)
     return float(np.sqrt(var_x)), float(np.sqrt(var_y))
 
 
 def gaussian_fit_uncertainty(pcov: FloatArray) -> FloatArray:
-    """1-sigma parameter uncertainties from a scipy.optimize.curve_fit covariance.
+    """sqrt(diag(pcov)) with non-finite/negative diagonals coerced to NaN.
 
-    Returns ``sqrt(diag(pcov))``. Diagonal entries that are non-finite or
-    negative (which curve_fit can produce when the fit is ill-conditioned)
-    are returned as NaN rather than imaginary numbers.
+    curve_fit returns ill-conditioned covariances as inf/-inf or with
+    negative diagonals; rather than emit imaginary uncertainties we mark
+    those parameters NaN so the caller treats them as not-determined.
     """
     pcov = np.asarray(pcov, dtype=np.float64)
     if pcov.ndim != 2 or pcov.shape[0] != pcov.shape[1]:
-        raise ValueError(f"pcov must be a square matrix; got shape {pcov.shape}")
+        raise ValueError(f"pcov must be square; got shape {pcov.shape}")
     diag = np.diag(pcov)
     safe = np.where(np.isfinite(diag) & (diag >= 0), diag, np.nan)
     return np.asarray(np.sqrt(safe))
@@ -150,42 +125,35 @@ def monte_carlo(
     func: Callable[..., FloatArray],
     inputs: Sequence[ArrayOrFloat],
     sigmas: Sequence[ArrayOrFloat],
-    n: int = MC_DEFAULT_N,
+    n: int = _MC_MIN_SAMPLES,
 ) -> Tuple[FloatArray, FloatArray]:
-    """Generic Monte Carlo propagation through ``func``.
+    """Run ``func`` on n Gaussian-perturbed copies of inputs.
 
-    Draws ``n`` Gaussian-perturbed copies of each input (using the
-    internal seeded RNG, ``default_rng(42)``), evaluates ``func`` on each,
-    and returns ``(mean, sigma)`` where ``sigma`` is the percentile-based
-    1-sigma half-range ``(p84 - p16) / 2`` per the design guide section 6.
-
-    Notes
-    -----
-    Callers must not pass an external seed. Reproducibility is guaranteed
-    only if all callers obtain randomness from this seeded RNG.
+    Returns (mean, sigma) where sigma is (p84 - p16) / 2 across samples.
+    The RNG is seeded internally — pass everything you need through
+    ``inputs`` and ``sigmas``, not via globals.
     """
-    if n < MC_DEFAULT_N:
-        raise ValueError(f"monte_carlo requires n >= {MC_DEFAULT_N} samples; got {n}")
+    if n < _MC_MIN_SAMPLES:
+        raise ValueError(
+            f"monte_carlo requires n >= {_MC_MIN_SAMPLES} samples; got {n}"
+        )
     if len(inputs) != len(sigmas):
         raise ValueError(
-            f"inputs and sigmas must have the same length; "
+            f"inputs and sigmas must be the same length; "
             f"got {len(inputs)} and {len(sigmas)}"
         )
 
-    rng = np.random.default_rng(MC_SEED)
-    samples = []
-    for _ in range(n):
-        perturbed = []
-        for value, sigma in zip(inputs, sigmas):
-            value_arr = np.asarray(value, dtype=np.float64)
-            sigma_arr = np.asarray(sigma, dtype=np.float64)
-            noise = rng.standard_normal(value_arr.shape) * sigma_arr
-            perturbed.append(value_arr + noise)
-        samples.append(np.asarray(func(*perturbed), dtype=np.float64))
+    rng = np.random.default_rng(_MC_SEED)
+    values = [np.asarray(v, dtype=np.float64) for v in inputs]
+    deviations = [np.asarray(s, dtype=np.float64) for s in sigmas]
 
-    stacked = np.stack(samples, axis=0)
-    mean = stacked.mean(axis=0)
-    p16 = np.percentile(stacked, 16, axis=0)
-    p84 = np.percentile(stacked, 84, axis=0)
-    sigma_out = (p84 - p16) / 2.0
-    return mean, sigma_out
+    samples = np.empty((n,) + np.shape(func(*values)), dtype=np.float64)
+    for i in range(n):
+        perturbed = [
+            v + rng.standard_normal(v.shape) * s for v, s in zip(values, deviations)
+        ]
+        samples[i] = np.asarray(func(*perturbed), dtype=np.float64)
+
+    mean = samples.mean(axis=0)
+    p16, p84 = np.percentile(samples, [16, 84], axis=0)
+    return mean, (p84 - p16) / 2.0
