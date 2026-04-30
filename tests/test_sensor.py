@@ -110,12 +110,12 @@ def test_spectral_response_out_of_range_raises() -> None:
         SensorModel.from_config(cfg)
 
 
-def test_validate_against_frame_shape_passes_with_broadcast() -> None:
+def test_validate_shape_passes_with_broadcast() -> None:
     sm = SensorModel.from_config(_minimal_config())
-    sm.validate_against_frame_shape((64, 64))
+    sm.validate_shape((64, 64))
 
 
-def test_validate_against_frame_shape_detects_mismatch() -> None:
+def test_validate_shape_detects_mismatch() -> None:
     sm = SensorModel.from_config(_minimal_config(), frame_shape=(32, 32))
     with pytest.raises(ValueError, match="does not match"):
-        sm.validate_against_frame_shape((64, 64))
+        sm.validate_shape((64, 64))

@@ -1,7 +1,4 @@
-"""Sensor model: dark current, flat field, gain, spectral response.
-
-Private module. Not part of the public API.
-"""
+"""Sensor model: dark current, flat field, gain, spectral response."""
 
 from __future__ import annotations
 
@@ -16,31 +13,21 @@ import numpy as np
 from smokesight._types import FloatArray
 
 _VALID_BIT_DEPTHS = (8, 12, 14, 16)
+# How far the flat-field mean is allowed to drift from 1.0 before we
+# emit a warning and renormalise.
 _FLAT_MEAN_TOLERANCE = 1e-3
+
+Shape = Tuple[int, int]
 
 
 @dataclass
 class SensorModel:
-    """Calibrated sensor parameters loaded from a ``cal.yaml`` config.
+    """Sensor parameters needed to convert DN to calibrated radiance.
 
-    Parameters
-    ----------
-    dark : np.ndarray
-        Dark current frame, shape (H, W) or (1, 1) for scalar broadcast,
-        float32, units of DN.
-    flat : np.ndarray
-        Flat-field response, shape (H, W) or (1, 1), float32, normalised
-        so the mean equals 1.0.
-    gain : float
-        DN-to-radiance scale factor, units of W m^-2 sr^-1 um^-1 per DN.
-    spectral_response : np.ndarray
-        Per-wavelength response, shape (N_lambda,), values in [0, 1].
-    wavelengths : np.ndarray
-        Centre wavelengths, shape (N_lambda,), units of micrometres.
-    bit_depth : int
-        Sensor ADC bit depth. Must be one of 8, 12, 14, 16.
-    noise_equivalent_radiance : float
-        NER, the read-noise floor in radiance units.
+    flat/dark are either full (H, W) frames or a (1, 1) broadcast scalar
+    when the config didn't supply a calibration image. Use
+    `validate_shape` once the video resolution is known if you want to
+    catch a mismatch before it bites you mid-pipeline.
     """
 
     dark: FloatArray
@@ -57,24 +44,13 @@ class SensorModel:
         cls,
         config: Mapping[str, Any],
         *,
-        frame_shape: Optional[Tuple[int, int]] = None,
+        frame_shape: Optional[Shape] = None,
     ) -> "SensorModel":
-        """Build a SensorModel from a parsed cal.yaml mapping.
-
-        Required keys: ``sensor.gain``, ``sensor.bit_depth``, ``sensor.ner``.
-        Optional keys: ``sensor.flat_field`` (path), ``sensor.dark_current``
-        (path), ``sensor.spectral_response`` (dict with ``wavelengths`` and
-        ``response`` lists).
-
-        ``frame_shape`` (H, W) is used to (a) construct default flat=ones /
-        dark=zeros arrays when the config omits the corresponding files, and
-        (b) validate that loaded files match the video resolution. When
-        ``frame_shape`` is None and a file is omitted, a (1, 1) broadcast
-        array is used; the caller must validate shape later.
-        """
-        if "sensor" not in config:
-            raise ValueError("config is missing required 'sensor' section")
-        sensor_cfg = config["sensor"]
+        """Build a SensorModel from a parsed cal.yaml mapping."""
+        try:
+            sensor_cfg = config["sensor"]
+        except KeyError as exc:
+            raise ValueError("config is missing required 'sensor' section") from exc
 
         for required in ("gain", "bit_depth", "ner"):
             if required not in sensor_cfg:
@@ -86,44 +62,23 @@ class SensorModel:
                 f"sensor.bit_depth must be one of {_VALID_BIT_DEPTHS}, got {bit_depth}"
             )
 
-        flat = _load_or_default(
-            sensor_cfg.get("flat_field"),
-            frame_shape=frame_shape,
-            default_value=1.0,
-            kind="flat_field",
-            normalize_mean=True,
-        )
-        dark = _load_or_default(
-            sensor_cfg.get("dark_current"),
-            frame_shape=frame_shape,
-            default_value=0.0,
-            kind="dark_current",
-            normalize_mean=False,
-        )
-
-        sr_cfg = sensor_cfg.get("spectral_response")
-        if sr_cfg is not None:
-            wavelengths = np.asarray(sr_cfg["wavelengths"], dtype=np.float32)
-            spectral_response = np.asarray(sr_cfg["response"], dtype=np.float32)
-            if wavelengths.shape != spectral_response.shape:
-                raise ValueError(
-                    "sensor.spectral_response.wavelengths and .response "
-                    f"must have equal length, got {wavelengths.shape} "
-                    f"and {spectral_response.shape}"
-                )
-            if (spectral_response < 0).any() or (spectral_response > 1).any():
-                raise ValueError(
-                    "sensor.spectral_response.response values must be in [0, 1]"
-                )
+        flat = _read_image(sensor_cfg.get("flat_field"), "flat_field", frame_shape)
+        if flat is None:
+            flat = _scalar_array(1.0, frame_shape)
         else:
-            wavelengths = np.array([0.55], dtype=np.float32)
-            spectral_response = np.array([1.0], dtype=np.float32)
+            flat = _renormalise_flat(flat)
+
+        dark = _read_image(sensor_cfg.get("dark_current"), "dark_current", frame_shape)
+        if dark is None:
+            dark = _scalar_array(0.0, frame_shape)
+
+        wavelengths, response = _spectral_response_from_config(sensor_cfg)
 
         return cls(
             dark=dark,
             flat=flat,
             gain=float(sensor_cfg["gain"]),
-            spectral_response=spectral_response,
+            spectral_response=response,
             wavelengths=wavelengths,
             bit_depth=bit_depth,
             noise_equivalent_radiance=float(sensor_cfg["ner"]),
@@ -133,49 +88,68 @@ class SensorModel:
     def n_wavelengths(self) -> int:
         return int(self.spectral_response.shape[0])
 
-    def validate_against_frame_shape(self, frame_shape: Tuple[int, int]) -> None:
-        """Raise ValueError if loaded flat/dark have incompatible shape."""
+    def validate_shape(self, frame_shape: Shape) -> None:
+        """Raise if flat or dark have a (non-broadcast) shape that doesn't match."""
         for name, arr in (("flat", self.flat), ("dark", self.dark)):
             if arr.shape == (1, 1):
-                continue  # broadcast-friendly default
+                continue
             if arr.shape != frame_shape:
                 raise ValueError(
                     f"{name} shape {arr.shape} does not match frame shape {frame_shape}"
                 )
 
 
-def _load_or_default(
-    path: Optional[str],
-    *,
-    frame_shape: Optional[Tuple[int, int]],
-    default_value: float,
-    kind: str,
-    normalize_mean: bool,
-) -> FloatArray:
-    if path is not None:
-        arr = np.asarray(imageio.imread(Path(path)), dtype=np.float32)
-        if arr.ndim != 2:
-            raise ValueError(
-                f"sensor.{kind} must be a 2-D image, got shape {arr.shape}"
-            )
-        if frame_shape is not None and arr.shape != frame_shape:
-            raise ValueError(
-                f"sensor.{kind} shape {arr.shape} does not match "
-                f"frame shape {frame_shape}"
-            )
-        if normalize_mean:
-            mean = float(arr.mean())
-            if mean <= 0:
-                raise ValueError(f"sensor.{kind} mean is {mean}; must be positive")
-            if abs(mean - 1.0) > _FLAT_MEAN_TOLERANCE:
-                warnings.warn(
-                    f"sensor.{kind} mean was {mean:.4f}; normalising to 1.0",
-                    UserWarning,
-                    stacklevel=2,
-                )
-                arr = arr / mean
-        return arr
+def _read_image(
+    path: Optional[str], kind: str, frame_shape: Optional[Shape]
+) -> Optional[FloatArray]:
+    if path is None:
+        return None
+    arr = np.asarray(imageio.imread(Path(path)), dtype=np.float32)
+    if arr.ndim != 2:
+        raise ValueError(f"sensor.{kind} must be a 2-D image, got shape {arr.shape}")
+    if frame_shape is not None and arr.shape != frame_shape:
+        raise ValueError(
+            f"sensor.{kind} shape {arr.shape} does not match frame shape {frame_shape}"
+        )
+    return arr
 
-    if frame_shape is not None:
-        return np.full(frame_shape, default_value, dtype=np.float32)
-    return np.full((1, 1), default_value, dtype=np.float32)
+
+def _renormalise_flat(arr: FloatArray) -> FloatArray:
+    mean = float(arr.mean())
+    if mean <= 0:
+        raise ValueError(f"sensor.flat_field mean is {mean}; must be positive")
+    if abs(mean - 1.0) <= _FLAT_MEAN_TOLERANCE:
+        return arr
+    warnings.warn(
+        f"sensor.flat_field mean was {mean:.4f}; normalising to 1.0",
+        UserWarning,
+        stacklevel=3,
+    )
+    return arr / mean
+
+
+def _scalar_array(value: float, frame_shape: Optional[Shape]) -> FloatArray:
+    """A (1, 1) broadcast or a full frame of `value`, depending on what we know."""
+    shape: Shape = frame_shape if frame_shape is not None else (1, 1)
+    return np.full(shape, value, dtype=np.float32)
+
+
+def _spectral_response_from_config(
+    sensor_cfg: Mapping[str, Any],
+) -> Tuple[FloatArray, FloatArray]:
+    sr_cfg = sensor_cfg.get("spectral_response")
+    if sr_cfg is None:
+        # Single-band default. The exact wavelength is arbitrary -- callers
+        # who care about wavelength must supply a spectral_response.
+        return np.array([0.55], dtype=np.float32), np.array([1.0], dtype=np.float32)
+
+    wavelengths = np.asarray(sr_cfg["wavelengths"], dtype=np.float32)
+    response = np.asarray(sr_cfg["response"], dtype=np.float32)
+    if wavelengths.shape != response.shape:
+        raise ValueError(
+            f"sensor.spectral_response.wavelengths and .response must have equal "
+            f"length, got {wavelengths.shape} and {response.shape}"
+        )
+    if (response < 0).any() or (response > 1).any():
+        raise ValueError("sensor.spectral_response.response values must be in [0, 1]")
+    return wavelengths, response
