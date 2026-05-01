@@ -11,6 +11,8 @@ import xarray as xr
 
 PathLike = Union[str, os.PathLike[str]]
 
+TAU_STANDARD_NAME = "atmosphere_optical_thickness_due_to_" "aerosol"
+
 
 def to_netcdf(
     result: Any,
@@ -26,16 +28,21 @@ def to_netcdf(
     sigma_tau = getattr(result, "sigma_tau", None)
 
     if tau is None or sigma_tau is None:
-        raise ValueError("to_netcdf requires result.tau and result.sigma_tau.")
+        message = "to_netcdf requires result.tau and " "result.sigma_tau."
+        raise ValueError(message)
 
     tau_arr = np.asarray(tau, dtype=np.float32)
     sigma_tau_arr = np.asarray(sigma_tau, dtype=np.float32)
 
     if tau_arr.shape != sigma_tau_arr.shape:
-        raise ValueError("tau and sigma_tau must have the same shape.")
+        message = "tau and sigma_tau must have the same shape."
+        raise ValueError(message)
 
     if tau_arr.ndim != 3:
-        raise ValueError("tau and sigma_tau must have shape (time, y, x).")
+        message = "tau and sigma_tau must have shape " "(time, y, x)."
+        raise ValueError(message)
+
+    history = f"{datetime.now(timezone.utc).isoformat()} " "SmokeSight Python API"
 
     ds = xr.Dataset(
         data_vars={
@@ -52,16 +59,14 @@ def to_netcdf(
             "title": "SmokeSight retrieval output",
             "institution": metadata.get("institution", ""),
             "source": "SmokeSight v0.1.0",
-            "history": (
-                f"{datetime.now(timezone.utc).isoformat()} " "SmokeSight Python API"
-            ),
+            "history": history,
             "references": "https://github.com/TasumLuke/smokesight",
         },
     )
 
     ds["tau"].attrs.update(
         {
-            "standard_name": "atmosphere_optical_thickness_due_to_aerosol",
+            "standard_name": TAU_STANDARD_NAME,
             "units": "1",
         }
     )
