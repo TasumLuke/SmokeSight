@@ -1,6 +1,6 @@
 # SmokeSight
  
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
  
@@ -70,7 +70,7 @@ Three things that do not exist together in any open package:
 Open an issue before submitting large changes. Tests must pass and new measurement outputs must include uncertainty propagation, if it cannot be documented, it does not ship.
  
 ```bash
-git clone https://github.com/your-org/smokesight
+git clone https://github.com/TasumLuke/Smoke-Sight
 pip install -e ".[dev]"
 pre-commit install
 pytest
