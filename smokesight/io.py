@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timezone
-from typing import Any, Union
+from typing import Any, Literal, Mapping, Union
 
 import numpy as np
 import xarray as xr
@@ -19,7 +19,7 @@ def to_netcdf(
     path: PathLike,
     *,
     complevel: int = 4,
-    mode: str = "w",
+    mode: Literal["w", "a"] = "w",
 ) -> None:
     """Write a SmokeSight retrieval-like result object to a NetCDF file."""
     metadata = getattr(result, "metadata", {}) or {}
@@ -78,15 +78,19 @@ def to_netcdf(
         }
     )
 
-    encoding = {
+    encoding: Mapping[Any, Mapping[str, Any]] = {
         variable_name: {"zlib": True, "complevel": complevel}
         for variable_name in ds.data_vars
     }
 
-    ds.to_netcdf(path, mode=mode, encoding=encoding)
+    ds.to_netcdf(
+        str(path),
+        mode=mode,
+        encoding=encoding,
+    )
 
 
-@xr.register_dataset_accessor("smokesight")
+@xr.register_dataset_accessor("smokesight")  # type: ignore[no-untyped-call]
 class SmokeSightAccessor:
     """Convenience accessor for SmokeSight xarray datasets."""
 
