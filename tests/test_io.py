@@ -115,6 +115,7 @@ def test_xarray_accessor(tmp_path):
     finally:
         ds.close()
 
+
 def test_to_netcdf_requires_tau_and_sigma_tau(tmp_path):
     """to_netcdf should reject objects missing tau or sigma_tau."""
     output_path = tmp_path / "output.nc"
@@ -156,4 +157,4 @@ def test_to_netcdf_requires_3d_tau(tmp_path):
     except ValueError as exc:
         assert "shape (time, y, x)" in str(exc)
     else:
-        raise AssertionError("Expected ValueError for non-3D tau.")        
+        raise AssertionError("Expected ValueError for non-3D tau.")

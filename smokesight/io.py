@@ -53,8 +53,7 @@ def to_netcdf(
             "institution": metadata.get("institution", ""),
             "source": "SmokeSight v0.1.0",
             "history": (
-                f"{datetime.now(timezone.utc).isoformat()} "
-                "SmokeSight Python API"
+                f"{datetime.now(timezone.utc).isoformat()} " "SmokeSight Python API"
             ),
             "references": "https://github.com/TasumLuke/smokesight",
         },
