@@ -1,1 +1,38 @@
+name: CI
 
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        python-version: ["3.8", "3.10", "3.11"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install package
+        run: pip install -e ".[dev]"
+
+      - name: Check formatting with black
+        run: black --check smokesight tests
+
+      - name: Check import order with isort
+        run: isort --check-only smokesight tests
+
+      - name: Run flake8
+        run: flake8 smokesight tests
+
+      - name: Run mypy
+        run: mypy smokesight
+
+      - name: Run tests
+        run: pytest --cov=smokesight --cov-fail-under=90
